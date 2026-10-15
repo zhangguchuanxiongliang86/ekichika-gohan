@@ -79,6 +79,25 @@
   <footer class="footer">
     <span>駅チカごはん</span><span>Made for your next meal.</span>
   </footer>
+  <style>
+  .genre {
+    cursor: pointer;
+  }
+
+  .genre.active,
+  .genre[aria-pressed="true"] {
+    background: #087cf0;
+    color: #fff;
+    border: 2px solid #0059b8;
+    font-weight: bold;
+  }
+
+  .genre:disabled {
+    opacity: 0.5;
+    cursor: wait;
+  }
+</style>
+
   <script src="./app.js" defer></script>
 </body>
 </html>
