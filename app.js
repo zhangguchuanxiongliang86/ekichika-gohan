@@ -330,6 +330,106 @@
       }
     }
 
+        async function fetchOverpassJSON(url) {
+      const wait = ms =>
+        new Promise(resolve => setTimeout(resolve, ms));
+
+      // 最初の通信＋再試行1回まで。
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const controller = new AbortController();
+        let timedOut = false;
+
+        const timer = setTimeout(() => {
+          timedOut = true;
+          controller.abort();
+        }, 60000);
+
+        let shouldRetry = false;
+
+        try {
+          let response;
+
+          try {
+            response = await fetch(url, {
+              signal: controller.signal,
+              headers: {
+                Accept: "application/json"
+              }
+            });
+          } catch (error) {
+            if (timedOut) {
+              throw new Error(
+                "店舗検索の通信が60秒以内に完了しませんでした。" +
+                "少し時間をおいて再検索してください。"
+              );
+            }
+
+            if (error instanceof TypeError) {
+              const networkError = new Error(
+                "店舗検索サーバーの応答を受け取れませんでした。" +
+                "通信経路やサーバー側の問題の可能性があります。"
+              );
+
+              networkError.retryable = true;
+              throw networkError;
+            }
+
+            throw error;
+          }
+
+          if (!response.ok) {
+            const httpError = new Error(
+              response.status === 429
+                ? "検索サーバーの利用制限に達しました。" +
+                  "時間をおいて再検索してください。"
+                : `店舗検索サーバーでエラーが発生しました` +
+                  `（HTTP ${response.status}）。`
+            );
+
+            // 429は自動再試行しません。
+            httpError.retryable =
+              [502, 503, 504].includes(response.status);
+
+            throw httpError;
+          }
+
+          return await response.json();
+        } catch (error) {
+          if (timedOut) {
+            throw new Error(
+              "店舗情報の受信が60秒以内に完了しませんでした。" +
+              "少し時間をおいて再検索してください。"
+            );
+          }
+
+          shouldRetry =
+            attempt === 0 && error?.retryable === true;
+
+          if (!shouldRetry) throw error;
+
+          console.warn("店舗検索を15秒後に1回だけ再試行:", error);
+        } finally {
+          clearTimeout(timer);
+        }
+
+        if (shouldRetry) {
+          setStatus(
+            "店舗検索サーバーとの通信が一時的に失敗しました。\n" +
+            "15秒待って、もう一度だけ自動で試します。",
+            "⏳"
+          );
+
+          await wait(15000);
+
+          setStatus(
+            "店舗情報を再取得しています。\n" +
+            "そのままお待ちください。",
+            "⏳"
+          );
+        }
+      }
+    }
+
     async function fetchJSON(url, options = {}, timeout = 15000) {
       const controller = new AbortController();
       let timedOut = false;
