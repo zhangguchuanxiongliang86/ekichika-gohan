@@ -606,16 +606,10 @@ out center tags;
         data: query
       });
 
-      const data = await fetchJSON(
-        `https://overpass-api.de/api/interpreter?${params}`,
-        {
-          headers: {
-            Accept: "application/json"
-          },
-          referrerPolicy: "strict-origin-when-cross-origin"
-        },
-        60000
-      );
+      const data = await fetchOverpassJSON(
+  `https://overpass-api.de/api/interpreter?${params}`
+);
+
 
       if (!Array.isArray(data.elements)) {
         throw new Error("お店の情報を正しく取得できませんでした。");
