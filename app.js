@@ -489,14 +489,17 @@ nwr["amenity"~"^(restaurant|cafe|fast_food|food_court|bar|pub|ice_cream)$"]
 out center tags;
       `.trim();
 
+      const params = new URLSearchParams({
+        data: query
+      });
+
       const data = await fetchJSON(
-        "https://overpass-api.de/api/interpreter",
+        `https://overpass-api.de/api/interpreter?${params}`,
         {
-          method: "POST",
           headers: {
-            "Content-Type": "text/plain;charset=UTF-8"
+            Accept: "application/json"
           },
-          body: query
+          referrerPolicy: "strict-origin-when-cross-origin"
         },
         60000
       );
