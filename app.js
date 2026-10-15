@@ -573,8 +573,28 @@ out center tags;
       );
 
       try {
-        const center = await geocodeStation(station);
-        const restaurants = await fetchRestaurants(center);
+                let center;
+
+        try {
+          center = await geocodeStation(station);
+        } catch (error) {
+          throw new Error(
+            "【駅の検索】" +
+            (error instanceof Error ? error.message : "取得に失敗しました。")
+          );
+        }
+
+        let restaurants;
+
+        try {
+          restaurants = await fetchRestaurants(center);
+        } catch (error) {
+          throw new Error(
+            "【お店の検索】" +
+            (error instanceof Error ? error.message : "取得に失敗しました。")
+          );
+        }
+
 
         searchedStation = station;
         cachedRestaurants = restaurants;
