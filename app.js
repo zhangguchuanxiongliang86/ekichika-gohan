@@ -352,9 +352,27 @@
             );
           }
 
-          throw new Error(
-            `情報を取得できませんでした（HTTP ${response.status}）。`
+                    const errorBody = await response.text();
+
+          const errorDocument = new DOMParser().parseFromString(
+            errorBody,
+            "text/html"
           );
+
+          const detail = (
+            errorDocument.body.textContent || errorBody
+          )
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(0, 1500);
+
+          console.error("APIのエラー本文:", errorBody);
+
+          throw new Error(
+            `情報を取得できませんでした（HTTP ${response.status}）。\n` +
+            detail
+          );
+
         }
 
         return await response.json();
