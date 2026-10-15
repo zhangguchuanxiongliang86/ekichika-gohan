@@ -3,103 +3,76 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#176b55">
+  <meta name="theme-color" content="#111214">
   <meta name="description" content="駅名とジャンルから近くの飲食店を探せるスマホ向けPWA">
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="luxury-dark.css">
-
- <title>駅チカごはん</title>
+  <link rel="stylesheet" href="./luxury-dark.css?v=personal-1">
+  <title>駅チカごはん</title>
 </head>
 <body>
   <header class="topbar">
     <div class="brand-mark" aria-hidden="true">🍴</div>
-    <div>
-      <p class="eyebrow">STATION FOOD FINDER</p>
-      <h1>駅チカごはん</h1>
-    </div>
+    <div><p class="eyebrow">STATION FOOD FINDER</p><h1>駅チカごはん</h1></div>
+    <a class="favorites-shortcut" href="#favorites-section">★ 保存したお店</a>
   </header>
-
   <main class="container">
     <section class="intro">
       <p class="intro-tag">今日、何食べる？</p>
       <h2>駅名から、近くのお店を探そう。</h2>
       <p class="subcopy">駅名と気分に合うジャンルを選ぶだけ。</p>
     </section>
-
     <section class="search-panel" aria-label="飲食店検索">
       <form id="search-form">
         <label for="station">駅名</label>
         <div class="station-input">
           <span aria-hidden="true">🚉</span>
-          <input id="station" name="station" type="text" placeholder="例：立場駅、横浜駅" value="立場駅" autocomplete="off" required>
+          <input id="station" name="station" type="text" placeholder="例：立場駅、横浜駅" value="立場駅" autocomplete="off" maxlength="160" required>
         </div>
-
-        <div class="label-row">
-          <label>食べたいジャンル</label>
-          <span class="optional">1つ選択</span>
+        <div class="history-section" aria-labelledby="history-title">
+          <div class="personal-heading"><h2 id="history-title">最近検索した駅</h2><button type="button" id="clear-history" class="text-button">履歴を消す</button></div>
+          <p id="history-empty" class="small-note">検索に成功した駅が、最近5件まで表示されます。</p>
+          <div id="history-list" class="history-list"></div>
         </div>
-        <div class="genre-grid" id="genre-grid">
-          <button type="button" class="genre active" data-genre="all" aria-pressed="true"><span>🍽️</span>すべて</button>
-          <button type="button" class="genre" data-genre="ramen" aria-pressed="false"><span>🍜</span>ラーメン</button>
-          <button type="button" class="genre" data-genre="japanese" aria-pressed="false"><span>🍱</span>和食</button>
-          <button type="button" class="genre" data-genre="cafe" aria-pressed="false"><span>☕</span>カフェ</button>
-          <button type="button" class="genre" data-genre="curry" aria-pressed="false"><span>🍛</span>カレー</button>
-          <button type="button" class="genre" data-genre="chinese" aria-pressed="false"><span>🥟</span>中華</button>
-          <button type="button" class="genre" data-genre="yakiniku" aria-pressed="false"><span>🥩</span>焼肉</button>
-          <button type="button" class="genre" data-genre="izakaya" aria-pressed="false"><span>🍻</span>居酒屋</button>
-          <button type="button" class="genre" data-genre="italian" aria-pressed="false"><span>🍝</span>洋食・イタリアン</button>
-          <button type="button" class="genre" data-genre="sushi" aria-pressed="false"><span>🍣</span>寿司</button>
+        <div class="label-row"><span id="genre-label">食べたいジャンル</span><span class="optional">1つ選択</span></div>
+        <div class="genre-grid" id="genre-grid" role="group" aria-labelledby="genre-label">
+          <button type="button" class="genre active" data-genre="all" aria-pressed="true"><span aria-hidden="true">🍽️</span>すべて</button>
+          <button type="button" class="genre" data-genre="ramen" aria-pressed="false"><span aria-hidden="true">🍜</span>ラーメン</button>
+          <button type="button" class="genre" data-genre="japanese" aria-pressed="false"><span aria-hidden="true">🍱</span>和食</button>
+          <button type="button" class="genre" data-genre="cafe" aria-pressed="false"><span aria-hidden="true">☕</span>カフェ</button>
+          <button type="button" class="genre" data-genre="curry" aria-pressed="false"><span aria-hidden="true">🍛</span>カレー</button>
+          <button type="button" class="genre" data-genre="chinese" aria-pressed="false"><span aria-hidden="true">🥟</span>中華</button>
+          <button type="button" class="genre" data-genre="yakiniku" aria-pressed="false"><span aria-hidden="true">🥩</span>焼肉</button>
+          <button type="button" class="genre" data-genre="izakaya" aria-pressed="false"><span aria-hidden="true">🍻</span>居酒屋</button>
+          <button type="button" class="genre" data-genre="italian" aria-pressed="false"><span aria-hidden="true">🍝</span>洋食・イタリアン</button>
+          <button type="button" class="genre" data-genre="sushi" aria-pressed="false"><span aria-hidden="true">🍣</span>寿司</button>
         </div>
-
-        <button class="search-button" id="search-button" type="submit">
-          <span aria-hidden="true">⌕</span> お店を探す
-        </button>
+        <button class="search-button" id="search-button" type="submit"><span aria-hidden="true">⌕</span> お店を探す</button>
       </form>
       <p class="data-note">お店情報：OpenStreetMapの公開データを利用します。</p>
     </section>
-
+    <p id="personal-notice" class="personal-notice" role="status" aria-live="polite"></p>
     <section class="results-section" aria-live="polite">
       <div class="results-heading">
-        <div>
-          <p class="eyebrow">YOUR RESULTS</p>
-          <h2 id="results-title">近くのお店</h2>
-        </div>
+        <div><p class="eyebrow">YOUR RESULTS</p><h2 id="results-title">近くのお店</h2></div>
         <span id="result-count" class="result-count">検索前</span>
       </div>
-      <div id="status" class="status">
-        <div class="status-icon">🔎</div>
-        <p>駅名とジャンルを選んで、<br>「お店を探す」を押してください。</p>
-      </div>
+      <div id="status" class="status"><div class="status-icon">🔎</div><p>駅名とジャンルを選んで、<br>「お店を探す」を押してください。</p></div>
       <div id="results" class="results-list"></div>
     </section>
-
-    <p class="footnote">掲載情報や営業状況は最新でない場合があります。訪問前に店舗情報をご確認ください。</p>
+    <section id="favorites-section" class="favorites-section" aria-labelledby="favorites-title">
+      <div class="results-heading">
+        <div><p class="eyebrow">YOUR FAVORITES</p><h2 id="favorites-title">保存したお店</h2></div>
+        <span id="favorites-count" class="result-count">0件</span>
+      </div>
+      <p class="small-note">この端末・ブラウザに最大100件保存します。別の端末には同期されません。ブラウザのデータ削除などで消える場合があります。</p>
+      <div id="favorites-empty" class="status"><div class="status-icon" aria-hidden="true">☆</div><p>気になるお店の「☆ お気に入りに保存」を押してください。</p></div>
+      <div id="favorites-list" class="results-list"></div>
+    </section>
+    <p class="footnote">掲載情報や営業状況は最新でない場合があります。お気に入りは保存時点の情報です。訪問前に店舗情報をご確認ください。</p>
+    <noscript><p class="status">検索・保存機能にはJavaScriptを有効にしてください。</p></noscript>
   </main>
-
-  <footer class="footer">
-    <span>駅チカごはん</span><span>Made for your next meal.</span>
-  </footer>
-  <style>
-  .genre {
-    cursor: pointer;
-  }
-
-  .genre.active,
-  .genre[aria-pressed="true"] {
-    background: #087cf0;
-    color: #fff;
-    border: 2px solid #0059b8;
-    font-weight: bold;
-  }
-
-  <style>
-    .genre:disabled {
-    opacity: 0.5;
-    cursor: wait;
-  }
-</style>
-
-  <script src="./app.js?v=2156" defer></script>
+  <footer class="footer"><span>駅チカごはん</span><span>Made for your next meal. / personal-1</span></footer>
+  <script src="./app.js?v=personal-1" defer></script>
 </body>
 </html>
