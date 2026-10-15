@@ -1,17 +1,29 @@
+// 駅チカごはん personal-1：お気に入り・検索履歴
 (() => {
   "use strict";
 
   function init() {
-    const form = document.querySelector("#search-form");
-    const stationInput = document.querySelector("#station");
-    const genreButtons = [...document.querySelectorAll(".genre")];
-    const searchButton = document.querySelector("#search-button");
-    const statusBox = document.querySelector("#status");
-    const resultsBox = document.querySelector("#results");
-    const resultCount = document.querySelector("#result-count");
-    const resultsTitle = document.querySelector("#results-title");
+    const $ = selector => document.querySelector(selector);
 
-    const requiredElements = {
+    const form = $("#search-form");
+    const stationInput = $("#station");
+    const searchButton = $("#search-button");
+    const genreButtons = [...document.querySelectorAll(".genre")];
+    const statusBox = $("#status");
+    const resultsBox = $("#results");
+    const resultCount = $("#result-count");
+    const resultsTitle = $("#results-title");
+
+    const historyBox = $("#history-list");
+    const historyEmpty = $("#history-empty");
+    const clearHistoryButton = $("#clear-history");
+
+    const favoritesBox = $("#favorites-list");
+    const favoritesCount = $("#favorites-count");
+    const favoritesEmpty = $("#favorites-empty");
+    const noticeBox = $("#personal-notice");
+
+    const required = {
       form,
       stationInput,
       searchButton,
@@ -21,17 +33,25 @@
       resultsTitle
     };
 
-    const missing = Object.entries(requiredElements)
+    const missing = Object.entries(required)
       .filter(([, element]) => !element)
       .map(([name]) => name);
 
     if (missing.length) {
-      console.error("必要なHTML要素が見つかりません:", missing);
+      console.error("必要なHTML要素がありません:", missing);
       return;
     }
 
     const SEARCH_RADIUS = 800;
     const MAX_RESULTS = 30;
+    const MAX_FAVORITES = 100;
+
+    const FAVORITES_KEY = "ekichika:personal:favorites:v1";
+    const HISTORY_KEY = "ekichika:personal:history:v1";
+
+    const STATION_TTL = 7 * 24 * 60 * 60 * 1000;
+    const RESTAURANT_TTL = 30 * 60 * 1000;
+    const EMPTY_TTL = 2 * 60 * 1000;
 
     const genreLabels = {
       all: "すべて",
@@ -46,11 +66,10 @@
       sushi: "寿司"
     };
 
-    // キーワードによる推定分類。ジャンルは重複する場合があります。
     const genreMatchers = {
       ramen: /ramen|ラーメン|らーめん|拉麺|中華そば/i,
       japanese:
-        /japanese|和食|sushi|寿司|tempura|天ぷら|udon|うどん|soba|そば|定食/i,
+        /japanese|和食|sushi|寿司|すし|鮨|tempura|天ぷら|udon|うどん|soba|そば|定食/i,
       cafe: /cafe|café|coffee|カフェ|喫茶|コーヒー/i,
       curry: /curry|カレー/i,
       chinese: /chinese|中華|餃子|dumpling/i,
@@ -60,21 +79,34 @@
       sushi: /sushi|寿司|すし|鮨/i
     };
 
-    const initialGenreButton = genreButtons.find(button =>
+    const initialButton = genreButtons.find(button =>
       button.classList.contains("active") ||
       button.getAttribute("aria-pressed") === "true"
     );
 
     let selectedGenre =
-      initialGenreButton?.dataset.genre in genreLabels
-        ? initialGenreButton.dataset.genre
+      Object.prototype.hasOwnProperty.call(
+        genreLabels,
+        initialButton?.dataset.genre
+      )
+        ? initialButton.dataset.genre
         : "all";
 
     let isSearching = false;
     let cachedRestaurants = null;
     let searchedStation = "";
+    let lastStationRequestAt = 0;
 
-    const originalSearchButtonHTML = searchButton.innerHTML;
+    const memoryCache = new Map();
+    const originalButtonHTML = searchButton.innerHTML;
+    const wait = ms =>
+      new Promise(resolve => setTimeout(resolve, ms));
+
+    function notify(message) {
+      if (noticeBox) {
+        noticeBox.textContent = message;
+      }
+    }
 
     function setStatus(message, icon = "🔎") {
       const iconElement = document.createElement("div");
@@ -82,21 +114,103 @@
       iconElement.textContent = icon;
       iconElement.setAttribute("aria-hidden", "true");
 
-      const messageElement = document.createElement("p");
-      messageElement.textContent = message;
-      messageElement.style.whiteSpace = "pre-line";
+      const paragraph = document.createElement("p");
+      paragraph.textContent = message;
+      paragraph.style.whiteSpace = "pre-line";
 
-      statusBox.replaceChildren(iconElement, messageElement);
+      statusBox.replaceChildren(iconElement, paragraph);
       statusBox.hidden = false;
     }
 
-    function getTags(element) {
-      return element.tags || {};
+    function readArray(key) {
+      try {
+        const value = JSON.parse(
+          localStorage.getItem(key) || "[]"
+        );
+        return Array.isArray(value) ? value : [];
+      } catch {
+        notify(
+          "保存データを読み込めませんでした。" +
+          "この画面内では引き続き使えます。"
+        );
+        return [];
+      }
     }
 
-    function getName(element) {
-      const tags = getTags(element);
+    function saveArray(key, value) {
+      try {
+        localStorage.setItem(key, JSON.stringify(value));
+        return true;
+      } catch {
+        notify(
+          "端末に保存できませんでした。" +
+          "この画面を閉じると変更が失われる場合があります。"
+        );
+        return false;
+      }
+    }
 
+    function readCache(key) {
+      let entry = memoryCache.get(key);
+
+      if (!entry) {
+        try {
+          entry = JSON.parse(
+            localStorage.getItem(key) || "null"
+          );
+        } catch {
+          return null;
+        }
+      }
+
+      if (
+        !entry ||
+        !Number.isFinite(entry.expiresAt) ||
+        Date.now() >= entry.expiresAt ||
+        !Object.prototype.hasOwnProperty.call(entry, "value")
+      ) {
+        memoryCache.delete(key);
+
+        try {
+          localStorage.removeItem(key);
+        } catch {}
+
+        return null;
+      }
+
+      memoryCache.set(key, entry);
+      return entry.value;
+    }
+
+    function writeCache(key, value, ttl) {
+      const entry = {
+        expiresAt: Date.now() + ttl,
+        value
+      };
+
+      memoryCache.set(key, entry);
+
+      try {
+        localStorage.setItem(key, JSON.stringify(entry));
+      } catch {
+        // 保存できない場合も、画面内のキャッシュは利用します。
+      }
+    }
+
+    function normalizeStation(value) {
+      return String(value || "")
+        .normalize("NFKC")
+        .trim()
+        .replace(/\s+/g, " ")
+        .replace(/駅$/, "");
+    }
+
+    function tagsOf(item) {
+      return item.tags || {};
+    }
+
+    function nameOf(item) {
+      const tags = tagsOf(item);
       return (
         tags["name:ja"] ||
         tags.name ||
@@ -105,125 +219,186 @@
       );
     }
 
-    function getType(element) {
-      const tags = getTags(element);
-
-      const values = [tags.cuisine, tags.amenity, tags.shop]
+    function typeOf(item) {
+      const tags = tagsOf(item);
+      const values = [
+        tags.cuisine,
+        tags.amenity,
+        tags.shop
+      ]
         .filter(Boolean)
         .flatMap(value => String(value).split(";"));
 
       return [...new Set(values)].join("・") || "飲食店";
     }
 
-    function matchesGenre(element, genre) {
+    function addressOf(item) {
+      const tags = tagsOf(item);
+
+      return (
+        tags["addr:full"] ||
+        [
+          tags["addr:province"] || tags["addr:state"],
+          tags["addr:city"],
+          tags["addr:suburb"],
+          tags["addr:quarter"],
+          tags["addr:neighbourhood"],
+          tags["addr:street"] || tags["addr:place"],
+          tags["addr:housenumber"]
+        ]
+          .filter(Boolean)
+          .join("") ||
+        "住所情報は登録されていません"
+      );
+    }
+
+    function matchesGenre(item, genre) {
       if (genre === "all") return true;
 
       const matcher = genreMatchers[genre];
       if (!matcher) return false;
 
-      const tags = getTags(element);
-      const searchable = [
-        tags.name,
-        tags["name:ja"],
-        tags.cuisine,
-        tags.amenity,
-        tags.shop,
-        tags.description,
-        tags.brand,
-        tags["description:ja"]
-      ]
-        .filter(Boolean)
-        .join(" ");
+      const tags = tagsOf(item);
 
-      return matcher.test(searchable);
-    }
-
-    function getAddress(element) {
-      const tags = getTags(element);
-
-      const parts = [
-        tags["addr:province"] || tags["addr:state"],
-        tags["addr:city"],
-        tags["addr:suburb"],
-        tags["addr:quarter"],
-        tags["addr:neighbourhood"],
-        tags["addr:street"] || tags["addr:place"],
-        tags["addr:housenumber"]
-      ].filter(Boolean);
-
-      return (
-        tags["addr:full"] ||
-        parts.join("") ||
-        "住所情報は登録されていません"
+      return matcher.test(
+        [
+          tags.name,
+          tags["name:ja"],
+          tags.cuisine,
+          tags.amenity,
+          tags.shop,
+          tags.description,
+          tags["description:ja"],
+          tags.brand
+        ]
+          .filter(Boolean)
+          .join(" ")
       );
     }
 
     function distanceMeters(a, b) {
-      const radius = 6371000;
-      const rad = value => (value * Math.PI) / 180;
-
+      const rad = value => value * Math.PI / 180;
       const dLat = rad(b.lat - a.lat);
       const dLon = rad(b.lon - a.lon);
 
-      const value =
+      const raw =
         Math.sin(dLat / 2) ** 2 +
         Math.cos(rad(a.lat)) *
           Math.cos(rad(b.lat)) *
           Math.sin(dLon / 2) ** 2;
 
-      const clamped = Math.min(1, Math.max(0, value));
+      const value = Math.max(0, Math.min(1, raw));
 
       return (
+        6371000 *
         2 *
-        radius *
-        Math.atan2(Math.sqrt(clamped), Math.sqrt(1 - clamped))
+        Math.atan2(
+          Math.sqrt(value),
+          Math.sqrt(1 - value)
+        )
       );
     }
 
     function formatDistance(meters) {
       if (meters < 10) return "10m未満";
-
       if (meters < 1000) {
         return `約${Math.round(meters / 10) * 10}m`;
       }
-
       return `約${(meters / 1000).toFixed(1)}km`;
     }
 
-    function mapURL(element) {
-      const { lat, lon } = element;
+    function favoriteKey(item) {
+      return `${item.type}/${item.id}`;
+    }
 
+    function validItem(item) {
       return (
-        `https://www.openstreetmap.org/` +
-        `?mlat=${lat}&mlon=${lon}#map=18/${lat}/${lon}`
+        item &&
+        ["node", "way", "relation"].includes(item.type) &&
+        Number.isSafeInteger(item.id) &&
+        item.id > 0 &&
+        Number.isFinite(item.lat) &&
+        Math.abs(item.lat) <= 90 &&
+        Number.isFinite(item.lon) &&
+        Math.abs(item.lon) <= 180 &&
+        item.tags &&
+        typeof item.tags === "object" &&
+        !Array.isArray(item.tags)
       );
     }
 
-    function googleSearchURL(name, station) {
-      const query = encodeURIComponent(`${name} ${station}`);
+    function loadFavorites() {
+      const seen = new Set();
 
-      return (
-        "https://www.google.com/maps/search/" +
-        `?api=1&query=${query}`
-      );
+      return readArray(FAVORITES_KEY)
+        .filter(item => {
+          if (!validItem(item)) return false;
+
+          const key = favoriteKey(item);
+          if (seen.has(key)) return false;
+
+          seen.add(key);
+          return true;
+        })
+        .slice(0, MAX_FAVORITES);
     }
 
-    function createLink(text, href, primary = false) {
+    function loadHistory() {
+      return [
+        ...new Set(
+          readArray(HISTORY_KEY)
+            .filter(value => typeof value === "string")
+            .map(value =>
+              value.normalize("NFKC").trim().slice(0, 160)
+            )
+            .filter(Boolean)
+        )
+      ].slice(0, 5);
+    }
+
+    let favorites = loadFavorites();
+    let stationHistory = loadHistory();
+
+    function updateFavoriteButton(button) {
+      const saved = favorites.some(
+        item =>
+          favoriteKey(item) === button.dataset.favoriteKey
+      );
+
+      button.textContent = saved
+        ? "★ 保存済み（押すと解除）"
+        : "☆ お気に入りに保存";
+
+      button.setAttribute("aria-pressed", String(saved));
+      button.classList.toggle("is-saved", saved);
+    }
+
+    function refreshFavoriteButtons() {
+      document
+        .querySelectorAll("[data-favorite-key]")
+        .forEach(updateFavoriteButton);
+    }
+
+    function makeLink(text, href, primary = false) {
       const link = document.createElement("a");
 
       link.className = primary
         ? "card-link primary"
         : "card-link";
 
-      link.href = href;
       link.textContent = text;
+      link.href = href;
       link.target = "_blank";
       link.rel = "noopener noreferrer";
 
       return link;
     }
 
-    function createRestaurantCard(item, station) {
+    function createRestaurantCard(
+      item,
+      station,
+      savedView = false
+    ) {
       const article = document.createElement("article");
       article.className = "restaurant-card";
 
@@ -231,49 +406,201 @@
       top.className = "card-top";
 
       const heading = document.createElement("h3");
-      heading.textContent = getName(item);
+      heading.textContent = nameOf(item);
 
       const badge = document.createElement("span");
       badge.className = "type-badge";
-      badge.textContent = getType(item);
+      badge.textContent = typeOf(item);
 
       top.append(heading, badge);
 
       const address = document.createElement("p");
       address.className = "address";
-      address.textContent =
-        `📍 直線距離 ${formatDistance(item.distance)}` +
-        `・${getAddress(item)}`;
+
+      address.textContent = savedView
+        ? (
+          `📍 保存時の検索駅：${item.savedStation || "未登録"}` +
+          `・${addressOf(item)}`
+        )
+        : (
+          `📍 直線距離 ${formatDistance(item.distance)}` +
+          `・${addressOf(item)}`
+        );
 
       const actions = document.createElement("div");
       actions.className = "card-actions";
 
+      const mapURL =
+        "https://www.openstreetmap.org/" +
+        `?mlat=${item.lat}&mlon=${item.lon}` +
+        `#map=18/${item.lat}/${item.lon}`;
+
+      const searchURL =
+        "https://www.google.com/maps/search/?api=1&query=" +
+        encodeURIComponent(`${nameOf(item)} ${station}`);
+
       actions.append(
-        createLink("地図で見る", mapURL(item)),
-        createLink(
-          "店舗情報",
-          googleSearchURL(getName(item), station),
-          true
-        )
+        makeLink("地図で見る", mapURL),
+        makeLink("店舗情報", searchURL, true)
       );
 
-      article.append(top, address, actions);
+      const saveButton = document.createElement("button");
+      saveButton.type = "button";
+      saveButton.className = "favorite-button";
+      saveButton.dataset.favoriteKey = favoriteKey(item);
+
+      saveButton.addEventListener("click", () => {
+        toggleFavorite(item, station);
+      });
+
+      updateFavoriteButton(saveButton);
+      article.append(top, address, actions, saveButton);
 
       return article;
+    }
+
+    function renderFavorites() {
+      if (!favoritesBox) return;
+
+      favoritesBox.replaceChildren();
+
+      if (favoritesCount) {
+        favoritesCount.textContent = `${favorites.length}件`;
+      }
+
+      if (favoritesEmpty) {
+        favoritesEmpty.hidden = favorites.length > 0;
+      }
+
+      const fragment = document.createDocumentFragment();
+
+      favorites.forEach(item => {
+        fragment.appendChild(
+          createRestaurantCard(
+            item,
+            item.savedStation || "",
+            true
+          )
+        );
+      });
+
+      favoritesBox.appendChild(fragment);
+    }
+
+    function toggleFavorite(item, station) {
+      const key = favoriteKey(item);
+      const exists = favorites.some(
+        saved => favoriteKey(saved) === key
+      );
+
+      if (exists) {
+        favorites = favorites.filter(
+          saved => favoriteKey(saved) !== key
+        );
+      } else {
+        if (!validItem(item)) {
+          notify("このお店の情報が不完全なため保存できません。");
+          return;
+        }
+
+        if (favorites.length >= MAX_FAVORITES) {
+          notify(
+            "お気に入りは100件までです。" +
+            "不要なお店を解除してから保存してください。"
+          );
+          return;
+        }
+
+        favorites.unshift({
+          type: item.type,
+          id: item.id,
+          lat: item.lat,
+          lon: item.lon,
+          tags: { ...tagsOf(item) },
+          savedStation: String(station).slice(0, 160),
+          savedAt: Date.now()
+        });
+      }
+
+      const persisted = saveArray(
+        FAVORITES_KEY,
+        favorites
+      );
+
+      refreshFavoriteButtons();
+      renderFavorites();
+
+      if (persisted) {
+        notify(
+          exists
+            ? "お気に入りを解除しました。"
+            : "お気に入りに保存しました。"
+        );
+      }
+    }
+
+    function renderHistory() {
+      if (!historyBox) return;
+
+      historyBox.replaceChildren();
+
+      if (historyEmpty) {
+        historyEmpty.hidden = stationHistory.length > 0;
+      }
+
+      stationHistory.forEach(station => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "history-chip";
+        button.textContent = station;
+        button.disabled = isSearching;
+
+        button.addEventListener("click", () => {
+          if (isSearching) return;
+
+          stationInput.value = station;
+          stationInput.focus();
+
+          notify(
+            `${station}を入力しました。` +
+            "ジャンルを選んで「お店を探す」を押してください。"
+          );
+        });
+
+        historyBox.appendChild(button);
+      });
+    }
+
+    function rememberStation(station) {
+      const name = station
+        .normalize("NFKC")
+        .trim()
+        .slice(0, 160);
+
+      const key = normalizeStation(name);
+
+      stationHistory = [
+        name,
+        ...stationHistory.filter(
+          saved => normalizeStation(saved) !== key
+        )
+      ].slice(0, 5);
+
+      saveArray(HISTORY_KEY, stationHistory);
+      renderHistory();
     }
 
     function renderCurrentResults() {
       if (cachedRestaurants === null) return;
 
-      const matches = cachedRestaurants.filter(item =>
-        matchesGenre(item, selectedGenre)
+      const matches = cachedRestaurants.filter(
+        item => matchesGenre(item, selectedGenre)
       );
 
       const visible = matches.slice(0, MAX_RESULTS);
 
       resultsTitle.textContent =
-        `${searchedStation}周辺` +
-        ` / ${genreLabels[selectedGenre]}`;
+        `${searchedStation}周辺 / ${genreLabels[selectedGenre]}`;
 
       resultCount.textContent =
         matches.length > MAX_RESULTS
@@ -285,7 +612,7 @@
       if (!matches.length) {
         setStatus(
           "このジャンルのお店が見つかりませんでした。\n" +
-            "別のジャンルや駅名でも試してください。",
+          "別のジャンルや駅名でも試してください。",
           "🫤"
         );
         return;
@@ -305,10 +632,14 @@
 
     function updateGenreButtons() {
       genreButtons.forEach(button => {
-        const active = button.dataset.genre === selectedGenre;
+        const active =
+          button.dataset.genre === selectedGenre;
 
         button.classList.toggle("active", active);
-        button.setAttribute("aria-pressed", String(active));
+        button.setAttribute(
+          "aria-pressed",
+          String(active)
+        );
       });
     }
 
@@ -321,98 +652,104 @@
         button.disabled = searching;
       });
 
+      document
+        .querySelectorAll(".history-chip")
+        .forEach(button => {
+          button.disabled = searching;
+        });
+
       form.setAttribute("aria-busy", String(searching));
 
       if (searching) {
         searchButton.textContent = "⏳ 検索しています…";
       } else {
-        searchButton.innerHTML = originalSearchButtonHTML;
+        searchButton.innerHTML = originalButtonHTML;
       }
     }
 
-        async function fetchOverpassJSON(url) {
-      const wait = ms =>
-        new Promise(resolve => setTimeout(resolve, ms));
+    async function fetchAPI(
+      url,
+      timeout,
+      restaurantRequest = false
+    ) {
+      const controller = new AbortController();
+      let timedOut = false;
 
-      // 最初の通信＋再試行1回まで。
+      const timer = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, timeout);
+
+      try {
+        const response = await fetch(url, {
+          signal: controller.signal,
+          headers: {
+            Accept: "application/json"
+          }
+        });
+
+        if (!response.ok) {
+          const error = new Error(
+            response.status === 429
+              ? (
+                "検索サーバーの利用制限に達しました。" +
+                "時間をおいて再検索してください。"
+              )
+              : (
+                "検索サーバーでエラーが発生しました" +
+                `（HTTP ${response.status}）。`
+              )
+          );
+
+          error.retryable =
+            restaurantRequest &&
+            [502, 503, 504].includes(response.status);
+
+          throw error;
+        }
+
+        return await response.json();
+      } catch (error) {
+        if (timedOut) {
+          throw new Error(
+            "通信がタイムアウトしました。" +
+            "少し時間をおいて再検索してください。"
+          );
+        }
+
+        if (error instanceof TypeError) {
+          const networkError = new Error(
+            "検索サーバーの応答を受け取れませんでした。" +
+            "通信経路やサーバー側の問題の可能性があります。"
+          );
+
+          networkError.retryable = restaurantRequest;
+          throw networkError;
+        }
+
+        throw error;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    async function fetchOverpassJSON(url) {
       for (let attempt = 0; attempt < 2; attempt++) {
-        const controller = new AbortController();
-        let timedOut = false;
-
-        const timer = setTimeout(() => {
-          timedOut = true;
-          controller.abort();
-        }, 60000);
-
-        let shouldRetry = false;
-
         try {
-          let response;
-
-          try {
-            response = await fetch(url, {
-              signal: controller.signal,
-              headers: {
-                Accept: "application/json"
-              }
-            });
-          } catch (error) {
-            if (timedOut) {
-              throw new Error(
-                "店舗検索の通信が60秒以内に完了しませんでした。" +
-                "少し時間をおいて再検索してください。"
-              );
-            }
-
-            if (error instanceof TypeError) {
-              const networkError = new Error(
-                "店舗検索サーバーの応答を受け取れませんでした。" +
-                "通信経路やサーバー側の問題の可能性があります。"
-              );
-
-              networkError.retryable = true;
-              throw networkError;
-            }
-
+          return await fetchAPI(url, 60000, true);
+        } catch (error) {
+          if (
+            attempt !== 0 ||
+            error.retryable !== true
+          ) {
             throw error;
           }
 
-          if (!response.ok) {
-            const httpError = new Error(
-              response.status === 429
-                ? "検索サーバーの利用制限に達しました。" +
-                  "時間をおいて再検索してください。"
-                : `店舗検索サーバーでエラーが発生しました` +
-                  `（HTTP ${response.status}）。`
-            );
+          console.warn(
+            "店舗検索を15秒後に1回だけ再試行:",
+            error
+          );
 
-            // 429は自動再試行しません。
-            httpError.retryable =
-              [502, 503, 504].includes(response.status);
-
-            throw httpError;
-          }
-
-          return await response.json();
-        } catch (error) {
-          if (timedOut) {
-            throw new Error(
-              "店舗情報の受信が60秒以内に完了しませんでした。" +
-              "少し時間をおいて再検索してください。"
-            );
-          }
-
-          shouldRetry =
-            attempt === 0 && error?.retryable === true;
-
-          if (!shouldRetry) throw error;
-
-          console.warn("店舗検索を15秒後に1回だけ再試行:", error);
-        } finally {
-          clearTimeout(timer);
-        }
-
-        if (shouldRetry) {
           setStatus(
             "店舗検索サーバーとの通信が一時的に失敗しました。\n" +
             "15秒待って、もう一度だけ自動で試します。",
@@ -430,85 +767,29 @@
       }
     }
 
-    async function fetchJSON(url, options = {}, timeout = 15000) {
-      const controller = new AbortController();
-      let timedOut = false;
+    async function geocodeStation(station) {
+      const normalized = normalizeStation(station);
+      const key =
+        `ekichika:station:personal-1:${normalized}`;
 
-      const timer = setTimeout(() => {
-        timedOut = true;
-        controller.abort();
-      }, timeout);
+      const cached = readCache(key);
 
-      try {
-        const response = await fetch(url, {
-          ...options,
-          signal: controller.signal
-        });
-
-        if (!response.ok) {
-          if (response.status === 429) {
-            throw new Error(
-              "検索が混み合っています。少し時間をおいて再度お試しください。"
-            );
-          }
-
-                    const errorBody = await response.text();
-
-          const errorDocument = new DOMParser().parseFromString(
-            errorBody,
-            "text/html"
-          );
-
-          const detail = (
-            errorDocument.body.textContent || errorBody
-          )
-            .replace(/\s+/g, " ")
-            .trim()
-            .slice(0, 1500);
-
-          console.error("APIのエラー本文:", errorBody);
-
-          throw new Error(
-            `情報を取得できませんでした（HTTP ${response.status}）。\n` +
-            detail
-          );
-
-        }
-
-        return await response.json();
-      } catch (error) {
-        if (timedOut) {
-          throw new Error(
-            "通信がタイムアウトしました。少し時間をおいて再度お試しください。"
-          );
-        }
-
-        if (error instanceof TypeError) {
-  const endpoint = new URL(url, location.href);
-
-  console.error("API通信の詳細:", {
-    endpoint: endpoint.origin + endpoint.pathname,
-    errorName: error.name,
-    errorMessage: error.message,
-    originalError: error
-  });
-
-  throw new Error(
-    "APIとの通信に失敗しました。\n" +
-    `接続先: ${endpoint.hostname}\n` +
-    `詳細: ${error.message}\n` +
-    "Wi-Fiとモバイル回線で結果が変わるか確認してください。"
-  );
-}
-
-
-        throw error;
-      } finally {
-        clearTimeout(timer);
+      if (
+        cached &&
+        Number.isFinite(cached.lat) &&
+        Number.isFinite(cached.lon)
+      ) {
+        return cached;
       }
-    }
 
-    async function geocodeStationFromAPI(station) {
+      const delay = Math.max(
+        0,
+        1100 - (Date.now() - lastStationRequestAt)
+      );
+
+      if (delay > 0) await wait(delay);
+      lastStationRequestAt = Date.now();
+
       const query = /駅$/.test(station)
         ? station
         : `${station}駅`;
@@ -521,85 +802,102 @@
         "accept-language": "ja"
       });
 
-      const places = await fetchJSON(
-        `https://nominatim.openstreetmap.org/search?${params}`
+      const places = await fetchAPI(
+        `https://nominatim.openstreetmap.org/search?${params}`,
+        15000
       );
 
       if (!Array.isArray(places) || !places.length) {
         throw new Error(
-          "駅が見つかりませんでした。都道府県名を添えるなど、駅名を変えて試してください。"
+          "駅が見つかりませんでした。" +
+          "都道府県名を添えるなど、入力を変えてください。"
         );
       }
 
-            const normalizeStationName = value =>
-        String(value ?? "")
-          .normalize("NFKC")
-          .replace(/\s+/g, "")
-          .replace(/駅$/, "");
-
-      // まずは分類が明確に駅になっている候補を探す。
-      const stationCandidate = places.find(place => {
+      const isStation = place => {
         const category = place.category || place.class;
 
         return (
-          (category === "railway" &&
-            ["station", "halt", "tram_stop"].includes(place.type)) ||
-          (category === "public_transport" &&
-            place.type === "station")
+          (
+            category === "railway" &&
+            ["station", "halt", "tram_stop"].includes(
+              place.type
+            )
+          ) ||
+          (
+            category === "public_transport" &&
+            place.type === "station"
+          )
         );
-      });
+      };
 
-      // 分類で見つからない場合は、候補自体の名前で確認する。
-      // display_name 全体には住所や周辺施設名が含まれるため使わない。
+      const stationCandidates = places.filter(isStation);
+
+      const exactStation = stationCandidates.find(
+        place =>
+          normalizeStation(place.name) === normalized
+      );
+
       const nameCandidate = places.find(place => {
-        const name = String(place.name ?? "").trim();
+        const name = String(place.name || "").trim();
 
         return (
           /駅$/.test(name) &&
-          normalizeStationName(name) ===
-            normalizeStationName(query)
+          normalizeStation(name) === normalized
         );
       });
 
-      const best = stationCandidate || nameCandidate;
+      const best =
+        exactStation ||
+        stationCandidates[0] ||
+        nameCandidate;
 
       if (!best) {
-        console.warn("駅検索の候補:", places);
-
         throw new Error(
-          "駅の候補を特定できませんでした。都道府県名を添えるなど、入力を変えて試してください。"
+          "駅の候補を特定できませんでした。" +
+          "都道府県名を添えるなど、入力を変えてください。"
         );
       }
 
-      // display_name 内の「駅」だけでは駅施設と断定しない。
-      
-      const lat = Number(best.lat);
-      const lon = Number(best.lon);
-
-      if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
-        throw new Error("駅の位置情報を取得できませんでした。");
-      }
-
-      return {
-        lat,
-        lon,
-        displayName: best.display_name
+      const center = {
+        lat: Number(best.lat),
+        lon: Number(best.lon),
+        displayName: best.display_name || query
       };
-    }
 
-        async function fetchRestaurantsFromAPI(center) {
       if (
         !Number.isFinite(center.lat) ||
         !Number.isFinite(center.lon)
       ) {
-        throw new Error("駅の位置情報が正しくありません。");
+        throw new Error("駅の位置情報を取得できませんでした。");
+      }
+
+      writeCache(key, center, STATION_TTL);
+      return center;
+    }
+
+    async function fetchRestaurants(center) {
+      const key =
+        `ekichika:restaurants:personal-1:${SEARCH_RADIUS}:` +
+        `${center.lat.toFixed(6)},${center.lon.toFixed(6)}`;
+
+      const cached = readCache(key);
+
+      if (
+        Array.isArray(cached) &&
+        cached.every(item =>
+          validItem(item) &&
+          Number.isFinite(item.distance)
+        )
+      ) {
+        return cached;
       }
 
       const query = `
-[out:json][timeout:25];
+[out:json][25];
 nwr["amenity"~"^(restaurant|cafe|fast_food|food_court|bar|pub|ice_cream)$"]
 (around:${SEARCH_RADIUS},${center.lat},${center.lon});
-out center tags;
+out body center qt;
       `.trim();
 
       const params = new URLSearchParams({
@@ -607,19 +905,21 @@ out center tags;
       });
 
       const data = await fetchOverpassJSON(
-  `https://overpass-api.de/api/interpreter?${params}`
-);
-
-
-      if (!Array.isArray(data.elements)) {
-        throw new Error("お店の情報を正しく取得できませんでした。");
-      }
+        `https://overpass-api.de/api/interpreter?${params}`
+      );
 
       if (data.remark) {
         console.warn("Overpassの応答:", data.remark);
 
         throw new Error(
-          "検索処理を完了できませんでした。少し時間をおいて再度お試しください。"
+          "店舗検索を完了できませんでした。" +
+          "少し時間をおいて再検索してください。"
+        );
+      }
+
+      if (!Array.isArray(data.elements)) {
+        throw new Error(
+          "お店の情報を正しく取得できませんでした。"
         );
       }
 
@@ -627,176 +927,51 @@ out center tags;
       const restaurants = [];
 
       for (const element of data.elements) {
-        const rawLat = element.lat ?? element.center?.lat;
-        const rawLon = element.lon ?? element.center?.lon;
+        const rawLat =
+          element.lat ?? element.center?.lat;
+        const rawLon =
+          element.lon ?? element.center?.lon;
 
         if (rawLat == null || rawLon == null) continue;
 
-        const lat = Number(rawLat);
-        const lon = Number(rawLon);
+        const item = {
+          type: element.type,
+          id: element.id,
+          tags: tagsOf(element),
+          lat: Number(rawLat),
+          lon: Number(rawLon)
+        };
 
-        if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
-          continue;
-        }
+        if (!validItem(item)) continue;
 
-        const key = `${element.type}/${element.id}`;
+        const id = favoriteKey(item);
+        if (seen.has(id)) continue;
+        seen.add(id);
 
-        if (seen.has(key)) continue;
-        seen.add(key);
+        item.distance = distanceMeters(center, item);
 
-        const distance = distanceMeters(center, { lat, lon });
+        if (item.distance > SEARCH_RADIUS) continue;
 
-        if (distance > SEARCH_RADIUS) continue;
-
-        restaurants.push({
-          ...element,
-          lat,
-          lon,
-          distance
-        });
+        restaurants.push(item);
       }
 
-      return restaurants.sort((a, b) => a.distance - b.distance);
-    }
-
-        // 保存期間：
-    // 駅の位置は7日、店舗情報は30分。
-    // 店舗が0件の場合は2分だけ保存します。
-    const STATION_CACHE_TTL = 7 * 24 * 60 * 60 * 1000;
-    const RESTAURANT_CACHE_TTL = 30 * 60 * 1000;
-    const EMPTY_CACHE_TTL = 2 * 60 * 1000;
-
-    const memoryCache = new Map();
-    let lastStationRequestAt = 0;
-
-    function readSearchCache(key, ttl) {
-      let entry = memoryCache.get(key);
-
-      if (!entry) {
-        try {
-          const saved = sessionStorage.getItem(key);
-          if (saved) entry = JSON.parse(saved);
-        } catch {
-          // 保存領域が使えない場合も検索は続けます。
-        }
-      }
-
-      if (
-        !entry ||
-        !Number.isFinite(entry.savedAt) ||
-        !Object.prototype.hasOwnProperty.call(entry, "value")
-      ) {
-        return null;
-      }
-
-      const age = Date.now() - entry.savedAt;
-
-      if (age < 0 || age >= ttl) {
-        memoryCache.delete(key);
-
-        try {
-          sessionStorage.removeItem(key);
-        } catch {}
-
-        return null;
-      }
-
-      memoryCache.set(key, entry);
-      return entry.value;
-    }
-
-    function writeSearchCache(key, value) {
-      const entry = {
-        savedAt: Date.now(),
-        value
-      };
-
-      memoryCache.set(key, entry);
-
-      try {
-        sessionStorage.setItem(key, JSON.stringify(entry));
-      } catch {
-        // 容量不足などの場合はメモリ内だけで再利用します。
-      }
-    }
-
-    function normalizeStationInput(value) {
-      return String(value)
-        .normalize("NFKC")
-        .trim()
-        .replace(/\s+/g, " ")
-        .replace(/駅$/, "");
-    }
-
-    async function geocodeStation(station) {
-      const normalized = normalizeStationInput(station);
-      const key = `ekichika:station:v2:${normalized}`;
-
-      const cached = readSearchCache(key, STATION_CACHE_TTL);
-
-      if (
-        cached &&
-        Number.isFinite(cached.lat) &&
-        Number.isFinite(cached.lon)
-      ) {
-        return cached;
-      }
-
-      // この画面からの駅検索リクエストを連続させません。
-      const waitMs = Math.max(
-        0,
-        1100 - (Date.now() - lastStationRequestAt)
+      restaurants.sort(
+        (a, b) => a.distance - b.distance
       );
 
-      if (waitMs > 0) {
-        await new Promise(resolve => setTimeout(resolve, waitMs));
-      }
-
-      lastStationRequestAt = Date.now();
-
-      const center = await geocodeStationFromAPI(station);
-
-      writeSearchCache(key, center);
-      return center;
-    }
-
-    async function fetchRestaurants(center) {
-      const key =
-        `ekichika:restaurants:v2:${SEARCH_RADIUS}:` +
-        `${center.lat.toFixed(6)},${center.lon.toFixed(6)}`;
-
-      const cached = readSearchCache(
+      writeCache(
         key,
-        RESTAURANT_CACHE_TTL
+        restaurants,
+        restaurants.length
+          ? RESTAURANT_TTL
+          : EMPTY_TTL
       );
 
-      if (Array.isArray(cached)) {
-        // 0件だった検索結果は、短い期間だけ再利用します。
-        if (cached.length > 0) {
-          return cached;
-        }
-
-        const recentEmpty = readSearchCache(
-          key,
-          EMPTY_CACHE_TTL
-        );
-
-        if (Array.isArray(recentEmpty)) {
-          return recentEmpty;
-        }
-      }
-
-      const restaurants = await fetchRestaurantsFromAPI(center);
-
-      writeSearchCache(key, restaurants);
       return restaurants;
     }
 
-
-
     genreButtons.forEach(button => {
-      // フォーム内でもジャンル選択だけで送信されないようにする。
-      button.setAttribute("type", "button");
+      button.type = "button";
 
       button.addEventListener("click", event => {
         event.preventDefault();
@@ -805,16 +980,34 @@ out center tags;
 
         const genre = button.dataset.genre;
 
-        if (!Object.prototype.hasOwnProperty.call(genreLabels, genre)) {
+        if (
+          !Object.prototype.hasOwnProperty.call(
+            genreLabels,
+            genre
+          )
+        ) {
           return;
         }
 
         selectedGenre = genre;
         updateGenreButtons();
-
-        // 取得済みデータを使うため、ジャンル変更では再通信しない。
         renderCurrentResults();
       });
+    });
+
+    clearHistoryButton?.addEventListener("click", () => {
+      stationHistory = [];
+
+      const persisted = saveArray(
+        HISTORY_KEY,
+        stationHistory
+      );
+
+      renderHistory();
+
+      if (persisted) {
+        notify("検索履歴を消しました。");
+      }
     });
 
     form.addEventListener("submit", async event => {
@@ -822,7 +1015,9 @@ out center tags;
 
       if (isSearching) return;
 
-      const station = stationInput.value.trim();
+      const station = stationInput.value
+        .normalize("NFKC")
+        .trim();
 
       if (!station) {
         setStatus("駅名を入力してください。", "⚠️");
@@ -833,26 +1028,32 @@ out center tags;
       setSearching(true);
       cachedRestaurants = null;
       resultsBox.replaceChildren();
+
       resultCount.textContent = "検索中";
       resultsTitle.textContent = `${station}周辺`;
-
-      setStatus(
-        "駅の場所と近くのお店を調べています。\n" +
-          "少し時間がかかることがあります。",
-        "⏳"
-      );
+      setStatus("駅の位置を確認しています…", "⏳");
 
       try {
-                let center;
+        let center;
 
         try {
           center = await geocodeStation(station);
         } catch (error) {
           throw new Error(
             "【駅の検索】" +
-            (error instanceof Error ? error.message : "取得に失敗しました。")
+            (
+              error instanceof Error
+                ? error.message
+                : "取得に失敗しました。"
+            )
           );
         }
+
+        setStatus(
+          "駅の位置を確認できました。\n" +
+          "近くのお店を調べています…",
+          "⏳"
+        );
 
         let restaurants;
 
@@ -861,17 +1062,21 @@ out center tags;
         } catch (error) {
           throw new Error(
             "【お店の検索】" +
-            (error instanceof Error ? error.message : "取得に失敗しました。")
+            (
+              error instanceof Error
+                ? error.message
+                : "取得に失敗しました。"
+            )
           );
         }
-
 
         searchedStation = station;
         cachedRestaurants = restaurants;
 
+        rememberStation(station);
         renderCurrentResults();
       } catch (error) {
-        console.error("飲食店検索に失敗しました:", error);
+        console.error("飲食店検索に失敗:", error);
 
         resultCount.textContent = "検索失敗";
 
@@ -886,26 +1091,52 @@ out center tags;
       }
     });
 
+    window.addEventListener("storage", event => {
+      if (
+        event.key === FAVORITES_KEY ||
+        event.key === null
+      ) {
+        favorites = loadFavorites();
+        refreshFavoriteButtons();
+        renderFavorites();
+      }
+
+      if (
+        event.key === HISTORY_KEY ||
+        event.key === null
+      ) {
+        stationHistory = loadHistory();
+        renderHistory();
+      }
+    });
+
     statusBox.setAttribute("role", "status");
     statusBox.setAttribute("aria-live", "polite");
     resultCount.setAttribute("aria-live", "polite");
 
     updateGenreButtons();
+    renderHistory();
+    renderFavorites();
 
     if (
       "serviceWorker" in navigator &&
       ["http:", "https:"].includes(location.protocol)
     ) {
-      const registerServiceWorker = () => {
-        navigator.serviceWorker.register("./sw.js").catch(error => {
-          console.warn("Service Workerの登録に失敗しました:", error);
-        });
+      const register = () => {
+        navigator.serviceWorker
+          .register("./sw.js")
+          .catch(error => {
+            console.warn(
+              "Service Workerの登録に失敗:",
+              error
+            );
+          });
       };
 
       if (document.readyState === "complete") {
-        registerServiceWorker();
+        register();
       } else {
-        window.addEventListener("load", registerServiceWorker, {
+        window.addEventListener("load", register, {
           once: true
         });
       }
@@ -920,4 +1151,3 @@ out center tags;
     init();
   }
 })();
-
