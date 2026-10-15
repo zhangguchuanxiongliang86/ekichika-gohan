@@ -456,7 +456,14 @@
       };
     }
 
-    async function fetchRestaurants(center) {
+        async function fetchRestaurants(center) {
+      if (
+        !Number.isFinite(center.lat) ||
+        !Number.isFinite(center.lon)
+      ) {
+        throw new Error("駅の位置情報が正しくありません。");
+      }
+
       const query = `
 [out:json][25];
 nwr["amenity"~"^(restaurant|cafe|fast_food|food_court|bar|pub|ice_cream)$"]
@@ -480,8 +487,9 @@ out center tags;
         throw new Error("お店の情報を正しく取得できませんでした。");
       }
 
-      // 一部だけ取得できた応答を、完全な検索結果として表示しない。
       if (data.remark) {
+        console.warn("Overpassの応答:", data.remark);
+
         throw new Error(
           "検索処理を完了できませんでした。少し時間をおいて再度お試しください。"
         );
@@ -496,21 +504,20 @@ out center tags;
 
         if (rawLat == null || rawLon == null) continue;
 
-              const lat = Number(best.lat);
-      const lon = Number(best.lon);
-
+        const lat = Number(rawLat);
+        const lon = Number(rawLon);
 
         if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
           continue;
         }
 
         const key = `${element.type}/${element.id}`;
+
         if (seen.has(key)) continue;
         seen.add(key);
 
         const distance = distanceMeters(center, { lat, lon });
 
-        // 面や線の中心点も、表示対象の半径内に限定する。
         if (distance > SEARCH_RADIUS) continue;
 
         restaurants.push({
@@ -523,6 +530,7 @@ out center tags;
 
       return restaurants.sort((a, b) => a.distance - b.distance);
     }
+
 
     genreButtons.forEach(button => {
       // フォーム内でもジャンル選択だけで送信されないようにする。
