@@ -400,8 +400,14 @@
         );
       }
 
-      // display_name 内の「駅」だけでは駅施設と断定しない。
-      const best = places.find(place => {
+            const normalizeStationName = value =>
+        String(value ?? "")
+          .normalize("NFKC")
+          .replace(/\s+/g, "")
+          .replace(/駅$/, "");
+
+      // まずは分類が明確に駅になっている候補を探す。
+      const stationCandidate = places.find(place => {
         const category = place.category || place.class;
 
         return (
@@ -412,12 +418,30 @@
         );
       });
 
+      // 分類で見つからない場合は、候補自体の名前で確認する。
+      // display_name 全体には住所や周辺施設名が含まれるため使わない。
+      const nameCandidate = places.find(place => {
+        const name = String(place.name ?? "").trim();
+
+        return (
+          /駅$/.test(name) &&
+          normalizeStationName(name) ===
+            normalizeStationName(query)
+        );
+      });
+
+      const best = stationCandidate || nameCandidate;
+
       if (!best) {
+        console.warn("駅検索の候補:", places);
+
         throw new Error(
-          "駅として確認できる候補が見つかりませんでした。都道府県名や路線名を添えて試してください。"
+          "駅の候補を特定できませんでした。都道府県名を添えるなど、入力を変えて試してください。"
         );
       }
 
+      // display_name 内の「駅」だけでは駅施設と断定しない。
+      
       const lat = Number(best.lat);
       const lon = Number(best.lon);
 
@@ -472,8 +496,9 @@ out center tags;
 
         if (rawLat == null || rawLon == null) continue;
 
-        const lat = Number(rawLat);
-        const lon = Number(rawLon);
+              const lat = Number(best.lat);
+      const lon = Number(best.lon);
+
 
         if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
           continue;
