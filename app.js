@@ -408,7 +408,7 @@
       }
     }
 
-    async function geocodeStation(station) {
+    async function geocodeStationFromAPI(station) {
       const query = /駅$/.test(station)
         ? station
         : `${station}駅`;
@@ -487,7 +487,7 @@
       };
     }
 
-        async function fetchRestaurants(center) {
+        async function fetchRestaurantsFromAPI(center) {
       if (
         !Number.isFinite(center.lat) ||
         !Number.isFinite(center.lon)
@@ -564,6 +564,140 @@ out center tags;
 
       return restaurants.sort((a, b) => a.distance - b.distance);
     }
+
+        // 保存期間：
+    // 駅の位置は7日、店舗情報は30分。
+    // 店舗が0件の場合は2分だけ保存します。
+    const STATION_CACHE_TTL = 7 * 24 * 60 * 60 * 1000;
+    const RESTAURANT_CACHE_TTL = 30 * 60 * 1000;
+    const EMPTY_CACHE_TTL = 2 * 60 * 1000;
+
+    const memoryCache = new Map();
+    let lastStationRequestAt = 0;
+
+    function readSearchCache(key, ttl) {
+      let entry = memoryCache.get(key);
+
+      if (!entry) {
+        try {
+          const saved = sessionStorage.getItem(key);
+          if (saved) entry = JSON.parse(saved);
+        } catch {
+          // 保存領域が使えない場合も検索は続けます。
+        }
+      }
+
+      if (
+        !entry ||
+        !Number.isFinite(entry.savedAt) ||
+        !Object.prototype.hasOwnProperty.call(entry, "value")
+      ) {
+        return null;
+      }
+
+      const age = Date.now() - entry.savedAt;
+
+      if (age < 0 || age >= ttl) {
+        memoryCache.delete(key);
+
+        try {
+          sessionStorage.removeItem(key);
+        } catch {}
+
+        return null;
+      }
+
+      memoryCache.set(key, entry);
+      return entry.value;
+    }
+
+    function writeSearchCache(key, value) {
+      const entry = {
+        savedAt: Date.now(),
+        value
+      };
+
+      memoryCache.set(key, entry);
+
+      try {
+        sessionStorage.setItem(key, JSON.stringify(entry));
+      } catch {
+        // 容量不足などの場合はメモリ内だけで再利用します。
+      }
+    }
+
+    function normalizeStationInput(value) {
+      return String(value)
+        .normalize("NFKC")
+        .trim()
+        .replace(/\s+/g, " ")
+        .replace(/駅$/, "");
+    }
+
+    async function geocodeStation(station) {
+      const normalized = normalizeStationInput(station);
+      const key = `ekichika:station:v2:${normalized}`;
+
+      const cached = readSearchCache(key, STATION_CACHE_TTL);
+
+      if (
+        cached &&
+        Number.isFinite(cached.lat) &&
+        Number.isFinite(cached.lon)
+      ) {
+        return cached;
+      }
+
+      // この画面からの駅検索リクエストを連続させません。
+      const waitMs = Math.max(
+        0,
+        1100 - (Date.now() - lastStationRequestAt)
+      );
+
+      if (waitMs > 0) {
+        await new Promise(resolve => setTimeout(resolve, waitMs));
+      }
+
+      lastStationRequestAt = Date.now();
+
+      const center = await geocodeStationFromAPI(station);
+
+      writeSearchCache(key, center);
+      return center;
+    }
+
+    async function fetchRestaurants(center) {
+      const key =
+        `ekichika:restaurants:v2:${SEARCH_RADIUS}:` +
+        `${center.lat.toFixed(6)},${center.lon.toFixed(6)}`;
+
+      const cached = readSearchCache(
+        key,
+        RESTAURANT_CACHE_TTL
+      );
+
+      if (Array.isArray(cached)) {
+        // 0件だった検索結果は、短い期間だけ再利用します。
+        if (cached.length > 0) {
+          return cached;
+        }
+
+        const recentEmpty = readSearchCache(
+          key,
+          EMPTY_CACHE_TTL
+        );
+
+        if (Array.isArray(recentEmpty)) {
+          return recentEmpty;
+        }
+      }
+
+      const restaurants = await fetchRestaurantsFromAPI(center);
+
+      writeSearchCache(key, restaurants);
+      return restaurants;
+    }
+
 
 
     genreButtons.forEach(button => {
