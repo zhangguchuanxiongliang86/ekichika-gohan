@@ -30,7 +30,7 @@
       return;
     }
 
-    const SEARCH_RADIUS = 1500;
+    const SEARCH_RADIUS = 800;
     const MAX_RESULTS = 30;
 
     const genreLabels = {
@@ -473,7 +473,7 @@ out center tags;
           },
           body: query
         },
-        35000
+        60000
       );
 
       if (!Array.isArray(data.elements)) {
