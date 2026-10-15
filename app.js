@@ -384,10 +384,23 @@
         }
 
         if (error instanceof TypeError) {
-          throw new Error(
-            "通信に失敗しました。ネット接続やAPIの稼働状況を確認してください。"
-          );
-        }
+  const endpoint = new URL(url, location.href);
+
+  console.error("API通信の詳細:", {
+    endpoint: endpoint.origin + endpoint.pathname,
+    errorName: error.name,
+    errorMessage: error.message,
+    originalError: error
+  });
+
+  throw new Error(
+    "APIとの通信に失敗しました。\n" +
+    `接続先: ${endpoint.hostname}\n` +
+    `詳細: ${error.message}\n` +
+    "Wi-Fiとモバイル回線で結果が変わるか確認してください。"
+  );
+}
+
 
         throw error;
       } finally {
