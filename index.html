@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#176b55">
+  <meta name="description" content="駅名とジャンルから近くの飲食店を探せるスマホ向けPWA">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./styles.css">
+  <title>駅チカごはん</title>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand-mark" aria-hidden="true">🍴</div>
+    <div>
+      <p class="eyebrow">STATION FOOD FINDER</p>
+      <h1>駅チカごはん</h1>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="intro">
+      <p class="intro-tag">今日、何食べる？</p>
+      <h2>駅名から、近くのお店を探そう。</h2>
+      <p class="subcopy">駅名と気分に合うジャンルを選ぶだけ。</p>
+    </section>
+
+    <section class="search-panel" aria-label="飲食店検索">
+      <form id="search-form">
+        <label for="station">駅名</label>
+        <div class="station-input">
+          <span aria-hidden="true">🚉</span>
+          <input id="station" name="station" type="text" placeholder="例：立場駅、横浜駅" value="立場駅" autocomplete="off" required>
+        </div>
+
+        <div class="label-row">
+          <label>食べたいジャンル</label>
+          <span class="optional">1つ選択</span>
+        </div>
+        <div class="genre-grid" id="genre-grid">
+          <button type="button" class="genre active" data-genre="all" aria-pressed="true"><span>🍽️</span>すべて</button>
+          <button type="button" class="genre" data-genre="ramen" aria-pressed="false"><span>🍜</span>ラーメン</button>
+          <button type="button" class="genre" data-genre="japanese" aria-pressed="false"><span>🍱</span>和食</button>
+          <button type="button" class="genre" data-genre="cafe" aria-pressed="false"><span>☕</span>カフェ</button>
+          <button type="button" class="genre" data-genre="curry" aria-pressed="false"><span>🍛</span>カレー</button>
+          <button type="button" class="genre" data-genre="chinese" aria-pressed="false"><span>🥟</span>中華</button>
+          <button type="button" class="genre" data-genre="yakiniku" aria-pressed="false"><span>🥩</span>焼肉</button>
+          <button type="button" class="genre" data-genre="izakaya" aria-pressed="false"><span>🍻</span>居酒屋</button>
+          <button type="button" class="genre" data-genre="italian" aria-pressed="false"><span>🍝</span>洋食・イタリアン</button>
+          <button type="button" class="genre" data-genre="sushi" aria-pressed="false"><span>🍣</span>寿司</button>
+        </div>
+
+        <button class="search-button" id="search-button" type="submit">
+          <span aria-hidden="true">⌕</span> お店を探す
+        </button>
+      </form>
+      <p class="data-note">お店情報：OpenStreetMapの公開データを利用します。</p>
+    </section>
+
+    <section class="results-section" aria-live="polite">
+      <div class="results-heading">
+        <div>
+          <p class="eyebrow">YOUR RESULTS</p>
+          <h2 id="results-title">近くのお店</h2>
+        </div>
+        <span id="result-count" class="result-count">検索前</span>
+      </div>
+      <div id="status" class="status">
+        <div class="status-icon">🔎</div>
+        <p>駅名とジャンルを選んで、<br>「お店を探す」を押してください。</p>
+      </div>
+      <div id="results" class="results-list"></div>
+    </section>
+
+    <p class="footnote">掲載情報や営業状況は最新でない場合があります。訪問前に店舗情報をご確認ください。</p>
+  </main>
+
+  <footer class="footer">
+    <span>駅チカごはん</span><span>Made for your next meal.</span>
+  </footer>
+  <script src="./app.js" defer></script>
+</body>
+</html>
