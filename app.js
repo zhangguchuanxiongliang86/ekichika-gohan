@@ -465,7 +465,7 @@
       }
 
       const query = `
-[out:json][timeout25];
+[out:json][timeout:25];
 nwr["amenity"~"^(restaurant|cafe|fast_food|food_court|bar|pub|ice_cream)$"]
 (around:${SEARCH_RADIUS},${center.lat},${center.lon});
 out center tags;
